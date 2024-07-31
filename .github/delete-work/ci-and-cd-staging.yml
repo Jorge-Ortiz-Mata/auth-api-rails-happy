@@ -1,0 +1,75 @@
+# name: CI & CD Staging
+
+# on:
+#   # Trigger the workflow on pushes to the main branch, including PR merges:
+#   push:
+#     branches:
+#       - main
+
+# # Generate a GitHub token that can be exchanged with Google Cloud - see
+# # https://github.com/google-github-actions/auth/tree/v0.6.0#setting-up-workload-identity-federation
+# permissions:
+#   contents: read
+#   id-token: write
+#   deployments: write
+
+# jobs:
+#   google-test-and-build:
+#     name: Google Integration
+#     uses: ./.github/workflows/test-and-build.yml
+#     with:
+#       deploy_name: staging
+#       gcloud_service_account: github-actions-runner@icalialabs-staging.iam.gserviceaccount.com
+#       gcloud_workload_identity_provider: projects/88514678916/locations/global/workloadIdentityPools/ci-workload-pool/providers/github
+#     secrets: inherit
+
+#   google-deploy-to-staging:
+#     name: Google Staging deployment
+#     uses: ./.github/workflows/deploy-to-cloud-run.yml
+#     needs:
+#       - google-test-and-build
+#     with:
+#       environment: staging
+#       deploy-name: staging
+#       marketing-url-api: marketing-url-api:latest
+#       bucket-name: workspace-bucket-name:latest
+#       bucket-credentials: workspace-bucket-json-credentials:latest
+#       cloud-sql-instance: icalialabs-staging:us-central1:postgres-dev-a
+#       cloud-sql-username-secret: workspace-db-username:latest
+#       cloud-sql-password-secret: workspace-db-password:latest
+#       cloud-run-service-suffix: ${{ needs.google-test-and-build.outputs.git-commit-short-sha }}
+#       cloud-run-container-image: us-central1-docker.pkg.dev/icalialabs-staging/app/workspace-icalialabs-com-backend@${{ needs.google-test-and-build.outputs.container-image-digest }}
+#       potentia-host: workspace-potentia-host:latest
+#       github_projects_token: operations-github-token:latest
+#       gcloud_service_account: github-actions-runner@icalialabs-staging.iam.gserviceaccount.com
+#       gcloud_workload_identity_provider: projects/88514678916/locations/global/workloadIdentityPools/ci-workload-pool/providers/github
+#       gcloud_project: icalialabs-staging
+#     secrets: inherit
+
+#   azure-test-and-build:
+#     if: ${{ github.actor != 'dependabot[bot]' }}
+#     name: Azure Integration
+#     uses: ./.github/workflows/azure-test-and-build.yml
+#     with:
+#       deploy-name: staging
+#       resource-group-name: WorkspaceIcaliaLabs
+#       app-name: workspace-backend-
+#     secrets: inherit
+
+#   azure-release-to-staging:
+#     if: ${{ github.actor != 'dependabot[bot]' }}
+#     name: Azure Delivery
+#     uses: ./.github/workflows/azure-deploy.yml
+#     needs:
+#       - azure-test-and-build
+#     with:
+#       plan-name: WorkspaceBasicPlan
+#       environment: ${{ github.head_ref }}
+#       deploy-name: staging
+#       resource-group-name: WorkspaceIcaliaLabs
+#       sku-plan: B1
+#       azure-acr-container-image: workspaceapps.azurecr.io/workspace-backend-staging@${{ needs.azure-test-and-build.outputs.container-image-digest }}
+#       app-name: workspace-backend-
+#       create-database: false
+#       webapp-always-on: true
+#     secrets: inherit

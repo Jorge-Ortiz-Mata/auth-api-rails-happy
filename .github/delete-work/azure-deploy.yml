@@ -1,0 +1,163 @@
+# on:
+#   workflow_call:
+#     inputs:
+#       environment:
+#         required: true
+#         type: string
+#       deploy-name:
+#         required: true
+#         type: string
+#       plan-name:
+#         required: true
+#         type: string
+#       resource-group-name:
+#         required: true
+#         type: string
+#       database-server-url:
+#         required: false
+#         type: string
+#         default: postgres-dev-a.postgres.database.azure.com
+#       sku-plan:
+#         required: false
+#         type: string
+#         default: FREE
+#       azure-acr-container-image:
+#         required: true
+#         type: string
+#       app-name:
+#         required: true
+#         type: string
+#       create-database:
+#         required: false
+#         type: boolean
+#         default: false
+#       webapp-always-on:
+#         required: false
+#         type: boolean
+#         default: false
+
+
+# jobs:
+#   service-deploy:
+#     name: Service Deploy
+#     runs-on: ubuntu-latest
+#     env:
+#       DATABASE_NAME: ${{ inputs.app-name }}${{ inputs.deploy-name }}
+#     steps:
+#       - name: Checkout the code
+#         uses: actions/checkout@v3.0.2
+
+#       - name: Register Deploy Start on Github
+#         uses: bobheadxi/deployments@v1.3.0
+#         id: deploy-start
+#         with:
+#           step: start
+#           ref: ${{ github.head_ref }}
+#           env: azure-${{ inputs.environment }}
+#           token: ${{ github.token }}
+
+#       - name: Authenticate to Azure
+#         uses: azure/login@v1
+#         with:
+#           client-id: ${{ secrets.AZURE_CLIENT_ID }}
+#           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+#           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+#       # Create database if input variable is true
+#       - name: Create database
+#         if: ${{ inputs.create-database }}
+#         run: |
+#           az postgres flexible-server db create \
+#           --server-name postgres-dev-a \
+#           --resource-group ${{ inputs.resource-group-name }} \
+#           --database-name ${{ env.DATABASE_NAME }} || true
+
+#       - name: Create plan for Azure web app
+#         run: |
+#           az appservice plan create -g ${{ inputs.resource-group-name }} -n ${{ inputs.plan-name }} --is-linux --sku ${{ inputs.sku-plan }}
+
+#       - name: Check if App Service exists
+#         uses: Azure/cli@v1.0.9
+#         with:
+#           inlineScript: |
+#             az webapp show -g "${{ inputs.resource-group-name }}" -n "${{ inputs.app-name }}${{ inputs.deploy-name }}" || echo "App service not found"
+#             echo "::set-output name=app_exists::$(if [[ $? -eq 0 ]]; then echo false; else echo true; fi)"
+#         id: app-exists-check
+
+#       - name: Get Key Vault secrets
+#         uses: Azure/get-keyvault-secrets@v1
+#         id: keyvault-secrets
+#         with:
+#           keyvault: workspace-backend-keys
+#           secrets: workspace-master-key, blogs-api, workspace-potentia-host, workspace-db-user, workspace-db-password
+
+#       - name: Create Azure App Service (if not existing)
+#         run: |
+#           if ${{ steps.app-exists-check.outputs.app_exists }}; then
+#             echo "App service already exists."
+#           else
+#             echo "Creating new App Service..."
+#             # Use az webapp create for creation logic as before
+#             az webapp create -g ${{ inputs.resource-group-name }} \
+#               -p ${{ inputs.plan-name }} \
+#               -n ${{ inputs.app-name }}${{ inputs.deploy-name }} \
+#               -i ${{ inputs.azure-acr-container-image }}
+#           fi
+
+#       - name: Wait for web app to start
+#         run: |
+#           while ! az webapp show --name ${{ inputs.app-name }}${{ inputs.deploy-name }} --resource-group ${{ inputs.resource-group-name }}  | grep -q '"state": "Running"'; do
+#             sleep 5
+#             echo "Waiting for web app to start..."
+#           done
+#           echo "Web app is running!"
+
+#       - name: Set app service environment variables
+#         run: |
+#           ENV_VARS="RAILS_MASTER_KEY=${{ steps.keyvault-secrets.outputs.workspace-master-key }} \
+#           BLOGS_API=${{ steps.keyvault-secrets.outputs.blogs-api }} \
+#           GOOGLE_CLOUD_PROJECT=icalialabs-staging \
+#           POTENTIA_HOST=${{ steps.keyvault-secrets.outputs.workspace-potentia-host }} \
+#           DATABASE_USERNAME=${{ steps.keyvault-secrets.outputs.workspace-db-user }} \
+#           DATABASE_PASSWORD=${{ steps.keyvault-secrets.outputs.workspace-db-password }} \
+#           ACTIVE_STORAGE_SERVICE=azure \
+#           AZURE_STORAGE_ACCOUNT_NAME=workspaceicalialabs \
+#           AZURE_STORAGE_CONTAINER=workspace-backend-staging \
+#           DATABASE_URL=postgres://${{inputs.database-server-url}}/${{ env.DATABASE_NAME }}"
+
+#           az webapp config appsettings set \
+#           --name ${{ inputs.app-name }}${{ inputs.deploy-name }} \
+#           --resource-group ${{ inputs.resource-group-name }} \
+#           --settings $ENV_VARS
+
+#           az webapp config set -g ${{ inputs.resource-group-name }} -n ${{ inputs.app-name }}${{ inputs.deploy-name }} --always-on ${{ inputs.webapp-always-on }}
+
+#       - name: Deploy to Azure Web App (if exists)
+#         uses: azure/webapps-deploy@v3
+#         if: ${{ !steps.app-exists-check.outputs.app_exists }} # Only run if app exists
+#         with:
+#           app-name: ${{ inputs.app-name }}${{ inputs.deploy-name }}
+#           images: '${{ inputs.azure-acr-container-image }}'
+#           resource-group-name: ${{ inputs.resource-group-name }}
+
+#       - name: Set deployment url
+#         id: set-deployment-url
+#         run: |
+#           echo "::set-output name=DEPLOYMENT_URL::$(az webapp show -g ${{ inputs.resource-group-name }} -n ${{ inputs.app-name }}${{ inputs.deploy-name }} --query defaultHostName --output tsv)"
+
+#       - name: Finalize the deployment state on Github
+#         uses: bobheadxi/deployments@v1.3.0
+#         if: always()
+#         with:
+#           step: finish
+#           override: true
+#           auto_inactive: true
+#           status: ${{ job.status }}
+#           token: ${{ github.token }}
+#           env_url: https://${{ steps.set-deployment-url.outputs.DEPLOYMENT_URL }}
+#           env: ${{ steps.deploy-start.outputs.env }}
+#           deployment_id: ${{ steps.deploy-start.outputs.deployment_id }}
+
+#       - name: Logout
+#         run: |
+#           az logout

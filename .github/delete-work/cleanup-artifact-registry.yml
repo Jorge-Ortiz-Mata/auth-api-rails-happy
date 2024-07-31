@@ -1,0 +1,74 @@
+# name: Cleanup Artifact Registry
+
+# on:
+#   # Run manually from the Actions tab:
+#   workflow_dispatch:
+
+#   schedule:
+#     # Run each night:
+#     - cron: '0 17 * * *'
+
+# # Generate a GitHub token that can be exchanged with Google Cloud - see
+# # https://github.com/google-github-actions/auth/tree/v0.6.0#setting-up-workload-identity-federation
+# permissions:
+#   contents: read
+#   id-token: write
+
+# jobs:
+#   azure-cleanup:
+#     name: Azure Cleanup
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout the code
+#         uses: actions/checkout@v3.1.0
+
+#       - name: Authenticate to Azure
+#         uses: azure/login@v1
+#         with:
+#           client-id: ${{ secrets.AZURE_CLIENT_ID }}
+#           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+#           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+#       - name: Delete old digests # delete those that have more than 7 days, have no tag assigned and at least leave the last 3
+#         run: |
+#           PURGE_CMD="acr purge --filter 'workspace-backend-(staging|pr[0-9]+):.*' \
+#             --untagged --ago 7d --keep 3"
+
+#           az acr run \
+#             --cmd "$PURGE_CMD" \
+#             --registry workspaceapps \
+#             /dev/null
+
+#   google-cleanup:
+#     name: Google Cleanup
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Checkout the code
+#         uses: actions/checkout@v3.1.0
+
+#       - name: Authenticate to Google Cloud
+#         uses: google-github-actions/auth@v0.6.0
+#         with:
+#           service_account: github-actions-runner@icalialabs-staging.iam.gserviceaccount.com
+#           workload_identity_provider: projects/88514678916/locations/global/workloadIdentityPools/ci-workload-pool/providers/github
+
+#       - name: Set up Google Cloud SDK
+#         uses: google-github-actions/setup-gcloud@v0.6.0
+
+#       - name: Get old images
+#         id: get-old-images
+#         run: |-
+#           echo "::set-output name=digests::$(
+#             gcloud artifacts docker images list \
+#             us-central1-docker.pkg.dev/icalialabs-staging/app/workspace-icalialabs-com-backend \
+#             --filter="updateTime<$(date --date="7 days ago" --iso-8601=seconds) AND tags "'!'"~ [g-zG-Z]" \
+#             --format json \
+#             --include-tags | jq -r '.[].version')"
+
+#       - name: Remove old images
+#         run: |-
+#           for row in $(echo "${{ steps.get-old-images.outputs.digests }}"); do
+#             gcloud artifacts docker images delete \
+#               us-central1-docker.pkg.dev/icalialabs-staging/app/workspace-icalialabs-com-backend@${row} \
+#               --async --delete-tags --quiet
+#           done

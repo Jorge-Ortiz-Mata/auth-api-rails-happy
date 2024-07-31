@@ -1,0 +1,99 @@
+# name: Review Environment Cleanup
+
+# on:
+#   pull_request:
+#     branches:
+#       - main
+#     types:
+#       - closed
+
+# # Generate a GitHub token that can be exchanged with Google Cloud - see
+# # https://github.com/google-github-actions/auth/tree/v0.6.0#setting-up-workload-identity-federation
+# permissions:
+#   contents: read
+#   id-token: write
+#   deployments: write # Allows removing deployments on GitHub
+
+# jobs:
+#   google-teardown_deployment:
+#     name: Teardown deployment
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       # actions/checkout MUST come before auth
+#       - name: Checkout the code
+#         uses: actions/checkout@v3.1.0
+
+#       - name: Authenticate to Google Cloud
+#         uses: google-github-actions/auth@v0.6.0
+#         with:
+#           service_account: github-actions-runner@icalialabs-staging.iam.gserviceaccount.com
+#           workload_identity_provider: projects/88514678916/locations/global/workloadIdentityPools/ci-workload-pool/providers/github
+
+#       - name: Set up gcloud Cloud SDK environment
+#         uses: google-github-actions/setup-gcloud@v0.6.0
+
+#       - name: Remove the deployed service from Cloud Run
+#         run: |-
+#           gcloud run services delete \
+#             workspace-backend-pr${{ github.event.pull_request.number }} \
+#             --quiet \
+#             --platform=managed \
+#             --region=us-central1
+
+#       - name: Drop the review database
+#         run: |-
+#           gcloud sql databases delete \
+#             workspace-backend-pr${{ github.event.pull_request.number }} \
+#             --quiet \
+#             --instance=postgres-dev-a
+
+#       - name: Deactivate & remove the deployment from Github
+#         uses: bobheadxi/deployments@v1.3.0
+#         if: always()
+#         with:
+#           step: delete-env
+#           token: ${{ github.token }}
+#           env: ${{ github.head_ref }}
+
+#   azure-teardown-deployment:
+#     name: Azure Teardown deployment
+#     runs-on: ubuntu-latest
+#     env:
+#       RESOURCE_GROUP: WorkspaceIcaliaLabs
+#       DEPLOY_NAME: pr${{ github.event.pull_request.number }}
+#       APP_NAME: workspace-backend-
+#       CONTAINER_REGISTRY: workspaceapps
+#     steps:
+#       - name: Checkout the code
+#         uses: actions/checkout@v3.1.0
+
+#       - name: Authenticate to Azure
+#         uses: azure/login@v1
+#         with:
+#           client-id: ${{ secrets.AZURE_CLIENT_ID }}
+#           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+#           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+#       - name: Remove the deployed service from App Service
+#         run: |-
+#           az webapp delete --name ${{ env.APP_NAME }}${{ env.DEPLOY_NAME }} --resource-group ${{ env.RESOURCE_GROUP }}
+
+#       - name: Drop the review database
+#         run: |-
+#           az postgres flexible-server db delete \
+#           --server-name postgres-dev-a \
+#           --resource-group ${{ env.RESOURCE_GROUP }} \
+#           --database-name ${{ env.APP_NAME }}${{ env.DEPLOY_NAME }} --y
+
+#       - name: Delete repository from container registry
+#         run: |-
+#           az acr repository delete -n ${{ env.CONTAINER_REGISTRY }} --repository ${{ env.APP_NAME }}${{ env.DEPLOY_NAME }} -y
+
+#       - name: Deactivate & remove the deployment from Github
+#         uses: bobheadxi/deployments@v1.3.0
+#         if: always()
+#         with:
+#           step: delete-env
+#           token: ${{ github.token }}
+#           env: azure-${{ github.head_ref }}

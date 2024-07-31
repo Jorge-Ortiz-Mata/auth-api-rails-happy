@@ -1,0 +1,101 @@
+# on:
+#   workflow_call:
+#     inputs:
+#       deploy-name:
+#         required: true
+#         type: string
+#       resource-group-name:
+#         required: true
+#         type: string
+#       app-name:
+#         required: true
+#         type: string
+#     outputs:
+#       container-image-digest:
+#         description: "The Docker image digest which uniquely identifies the built image"
+#         value: ${{ jobs.test-and-build.outputs.container-image-digest }}
+
+# jobs:
+#   test-and-build:
+#     name: Test and Build - Azure
+#     runs-on: ubuntu-latest
+#     outputs:
+#       container-image-digest: ${{ steps.build-and-push-release-image.outputs.digest }}
+#     steps:
+#       - name: Checkout the code
+#         uses: actions/checkout@v3.0.2
+
+#       - name: Set additional variables
+#         id: variables
+#         uses: icalia-actions/common-variables@v0.0.3
+
+#       - name: Set up Docker Buildx
+#         id: buildx
+#         uses: docker/setup-buildx-action@v2.2.1
+#         with:
+#           version: v0.9.1
+
+#       - name: Build Test Image
+#         id: build-test-image
+#         uses: docker/build-push-action@v3.2.0
+#         with:
+#           load: true
+#           target: testing
+#           platforms: linux/amd64
+#           builder: ${{ steps.buildx.outputs.name }}
+#           build-args: |
+#             DEVELOPER_UID=${{ steps.variables.outputs.runner-uid }}
+#             DEVELOPER_USERNAME=${{ steps.variables.outputs.runner-user }}
+#           tags: |
+#             icalialabs/workspace-icalialabs-com-backend:testing-${{ steps.variables.outputs.git-dasherized-branch }}
+#           cache-from: type=gha
+#           cache-to: type=gha,mode=max
+
+#       - name: Run tests
+#         env:
+#           DEVELOPER_UID: ${{ steps.variables.outputs.runner-uid }}
+#           DEVELOPER_USERNAME: ${{ steps.variables.outputs.runner-user }}
+#           TESTING_IMAGE_TAG: ":testing-${{ steps.variables.outputs.git-dasherized-branch }}"
+#         run: docker compose run --rm tests
+
+#       - name: Archive test logs and screenshots
+#         uses: actions/upload-artifact@v3.1.0
+#         if: always()
+#         with:
+#           name: system-spec-screenshots
+#           retention-days: 7
+#           path: |
+#             log/test.log
+#             tmp/capybara/screenshots
+
+#       - name: Authenticate to Azure
+#         uses: azure/login@v1
+#         with:
+#           client-id: ${{ secrets.AZURE_CLIENT_ID }}
+#           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+#           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+#       # Login to ACR to be able to push the image in container registry
+#       - name: Login to acr
+#         run: az acr login --name workspaceapps.azurecr.io
+
+#       - name: Build & Push Release Image
+#         id: build-and-push-release-image
+#         uses: docker/build-push-action@v3.2.0
+#         with:
+#           push: true
+#           target: release
+#           platforms: linux/amd64
+#           builder: ${{ steps.buildx.outputs.name }}
+#           build-args: |
+#             DEVELOPER_UID=${{ steps.variables.outputs.runner-uid }}
+#             DEVELOPER_USERNAME=${{ steps.variables.outputs.runner-user }}
+#           tags: |
+#             workspaceapps.azurecr.io/${{ inputs.app-name }}${{ inputs.deploy-name }}:${{ steps.variables.outputs.git-dasherized-branch }}
+#             workspaceapps.azurecr.io/${{ inputs.app-name }}${{ inputs.deploy-name }}:latest
+#           cache-from: type=gha
+#           cache-to: type=gha,mode=max
+
+#       - name: Logout
+#         run: |
+#           az logout

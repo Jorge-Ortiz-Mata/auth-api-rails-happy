@@ -1,0 +1,148 @@
+volumes:
+  postgres-data:
+  vscode-extensions:
+  vscode-insiders-extensions:
+
+services:
+  # cloudsql:
+  #   image: gcr.io/cloudsql-docker/gce-proxy:1.28.1
+  #   command: /cloud_sql_proxy -instances=icalialabs-staging:us-central1:postgres-dev-a=tcp:0.0.0.0:5432
+  #   ports:
+  #     # We'll bind the host port to localhost (127.0.0.1:5433):
+  #     - 127.0.0.1:5433:5432
+  #   volumes:
+  #     - ${GOOGLE_APPLICATION_CREDENTIALS:-./tmp/google-cloud-credentials.json}:/config/google-cloud-credentials.json:ro
+  #   environment:
+  #     GOOGLE_APPLICATION_CREDENTIALS: /config/google-cloud-credentials.json
+
+  postgres:
+    image: postgres:14-alpine
+    volumes:
+      # We'll store the postgres data in the 'postgres_data' volume we defined:
+      - type: volume
+        source: postgres-data
+        target: /var/lib/postgresql/data
+
+      - ./db/dumps:/db/dumps
+      - ./bin/dumpdb:/usr/local/bin/dumpdb:ro
+      - ./bin/restoredb:/usr/local/bin/restoredb:ro
+    ports:
+      - published: ${RAILS_API_GETTING_STARTE_GCP_PG_PORT:-5432}
+        target: 5432
+    environment:
+      POSTGRES_USER: ${USER:-you}
+      POSTGRES_HOST_AUTH_METHOD: trust
+
+    # See https://docs.docker.com/compose/profiles/
+    # profiles:
+    #   - ci
+    #   - testing
+    #   - staging
+    #   - development
+
+    # profiles:
+    #   - ci
+    #   - testing
+    #   - development
+
+  # The tests container:
+  tests: &app
+    build: &app-build
+      context: .
+      dockerfile: Dockerfile
+      target: development #testing
+      args:
+        DEVELOPER_UID: ${UID:-1000}
+        DEVELOPER_USERNAME: ${USER:-you}
+    image: rails-api-getting-starte-gcp${TESTING_IMAGE_TAG:-:testing}
+
+    volumes:
+      # Mount the app code into the app containers:
+      - .:/workspaces/rails-api-getting-starte-gcp
+
+    # Keep the stdin open, so we can attach to our app container's process
+    # and do things such as byebug, etc:
+    stdin_open: true
+
+    # Enable sending signals (CTRL+C, CTRL+P + CTRL+Q) into the container:
+    tty: true
+
+    # Required for ptrace-based debuggers like C++, Go, and Rust
+    cap_add:
+      - SYS_PTRACE
+      - NET_ADMIN
+    security_opt:
+      - seccomp:unconfined
+
+    entrypoint: /workspaces/rails-api-getting-starte-gcp/bin/dev-entrypoint
+
+    # Link to our postgres and redis services, so they can be visible from our
+    # app service containers:
+    depends_on:
+      - postgres
+
+    # The command we want to execute by default when running the container
+    command: rspec
+
+    # Specify environment variables available for our app containers. We'll
+    # leave a YML anchor in case we need to override or add more variables if
+    # needed on each app service:
+    environment: &app-env
+      RAILS_LOG_TO_STDOUT: "true"
+
+      DEBIAN_FRONTEND: dialog
+
+      DATABASE_URL: postgres://postgres:5432/?encoding=unicode
+
+      GOOGLE_CLOUD_PROJECT: rails-api-getting-starte-gcp
+      TEST_ENV: true
+
+    # profiles:
+    #   - ci
+    #   - testing
+
+  # The Visual Studio Code / GitHub Codespaces development container:
+  devcontainer:
+    <<: *app
+    build:
+      <<: *app-build
+      target: development
+
+    volumes:
+      - .:/workspaces/rails-api-getting-starte-gcp
+      - vscode-extensions:/home/${USER:-you}/.vscode-server/extensions
+      - vscode-insiders-extensions:/home/${USER:-you}/.vscode-server-insiders/extensions
+      - "~/.gitconfig:/etc/gitconfig"
+
+    image: icalialabs/rails-api-getting-starte-gcp:development
+
+    # The command we want to execute by default when running the container
+    command: /bin/sh -c "while sleep 1000; do :; done"
+
+    environment:
+      <<: *app-env
+      RAILS_ENV: development
+      EDITOR: code --wait
+
+    # profiles:
+    #   - development
+
+  # The releasable container:
+  web-staging:
+    <<: *app
+    build:
+      <<: *app-build
+      target: release
+    ports:
+      - published: ${RAILS_API_GETTING_STARTE_GCP_WEB_PORT:-3000}
+        target: 3000
+
+    depends_on:
+      - postgres
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgres://${USER:-you}@postgres:5432/rails_api_getting_starte_gcp_development?encoding=unicode
+      TEST_ENV: false
+
+    # profiles:
+    #   - staging
